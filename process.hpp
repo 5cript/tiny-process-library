@@ -7,6 +7,7 @@
 #include <mutex>
 #include <thread>
 #include <memory>
+#include <unordered_map>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -28,6 +29,7 @@ public:
   typedef pid_t id_type;
   typedef int fd_type;
   typedef std::string string_type;
+  typedef std::unordered_map <string_type, string_type> map_type;
 #endif
 private:
   class Data {
@@ -46,6 +48,7 @@ public:
           std::function<void(const char *bytes, size_t n)> read_stdout=nullptr,
           std::function<void(const char *bytes, size_t n)> read_stderr=nullptr,
           bool open_stdin=false,
+          map_type *environment = nullptr,
           size_t buffer_size=131072) noexcept;
 #ifndef _WIN32
   /// Supported on Unix-like systems only.
@@ -53,6 +56,7 @@ public:
           std::function<void(const char *bytes, size_t n)> read_stdout=nullptr,
           std::function<void(const char *bytes, size_t n)> read_stderr=nullptr,
           bool open_stdin=false,
+          map_type *environment = nullptr,
           size_t buffer_size=131072) noexcept;
 #endif
   ~Process() noexcept;
@@ -88,9 +92,9 @@ private:
   
   std::unique_ptr<fd_type> stdout_fd, stderr_fd, stdin_fd;
   
-  id_type open(const string_type &command, const string_type &path) noexcept;
+  id_type open(const string_type &command, const string_type &path, map_type *environment) noexcept;
 #ifndef _WIN32
-  id_type open(std::function<void()> function) noexcept;
+  id_type open(std::function<void()> function, map_type* environment) noexcept;
 #endif
   void async_read() noexcept;
   void close_fds() noexcept;

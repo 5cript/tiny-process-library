@@ -3,21 +3,88 @@
 #include <unistd.h>
 #include <signal.h>
 #include <stdexcept>
+#include <cstdio>
+
+extern char** environ;
 
 namespace TinyProcessLib {
+
+template <typename string_type, typename map_type>
+struct ExecutionHelper
+{
+public:
+  static void exec(string_type const& command, string_type const& path, map_type* environment)
+  {
+    if (environment) {
+      std::vector <std::string> concatenated;
+      std::vector <char const*> pointer_store;
+      concatenated.reserve(environment->size());
+      for (auto const& var : *environment) {
+        concatenated.push_back(var.first + "=" + var.second);
+        pointer_store.push_back(concatenated.back().c_str());
+      }
+      pointer_store.push_back((char const*)nullptr);
+
+      if (!path.empty())
+        execle("/bin/sh", "sh", "-c", ("cd '"+escape_path(path)+"' && "+command).c_str(), (char*)nullptr, &pointer_store.front());
+      else
+        execle("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr, &pointer_store.front());
+    }
+    else {
+      if (!path.empty())
+        execl("/bin/sh", "sh", "-c", ("cd '"+escape_path(path)+"' && "+command).c_str(), (char*)nullptr);
+      else
+        execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
+    }
+  }
+
+  static void setenv(map_type const& environment)
+  {
+    // clear environment
+    char *var = *environ;
+    int i = 0;
+    for (; var; ++i) {
+      string_type current{var};
+      auto pos = current.find('=');
+      if (pos == string_type::npos)
+        continue;
+      putenv(const_cast <char*> (current.substr(0, pos + 1).c_str()));
+      var = *(environ + i);
+    }
+  }
+
+private:
+  static string_type escape_path(string_type const& path)
+  {
+    string_type path_escaped;
+    size_t pos=0;
+    while((pos=path_escaped.find('\'', pos))!=std::string::npos){
+      path_escaped.replace(pos, 1, "'\\''");
+      pos+=4;
+    }
+    return path_escaped;
+  }
+};
 
 Process::Data::Data() noexcept : id(-1) {}
 
 Process::Process(std::function<void()> function,
                  std::function<void (const char *, size_t)> read_stdout,
                  std::function<void (const char *, size_t)> read_stderr,
-                 bool open_stdin, size_t buffer_size) noexcept :
-                 closed(true), read_stdout(read_stdout), read_stderr(read_stderr), open_stdin(open_stdin), buffer_size(buffer_size) {
-  open(function);
+                 bool open_stdin,
+                 map_type *environment,
+                 size_t buffer_size) noexcept
+  : closed(true)
+  , read_stdout(read_stdout)
+  , read_stderr(read_stderr)
+  , open_stdin(open_stdin)
+  , buffer_size(buffer_size)
+{
+  open(function, environment);
   async_read();
 }
 
-Process::id_type Process::open(std::function<void()> function) noexcept {
+Process::id_type Process::open(std::function<void()> function, map_type *environment) noexcept {
   if(open_stdin)
     stdin_fd=std::unique_ptr<fd_type>(new fd_type);
   if(read_stdout)
@@ -38,7 +105,7 @@ Process::id_type Process::open(std::function<void()> function) noexcept {
     if(stdout_fd) {close(stdout_p[0]);close(stdout_p[1]);}
     return -1;
   }
-  
+
   id_type pid = fork();
   
   if (pid < 0) {
@@ -63,7 +130,10 @@ Process::id_type Process::open(std::function<void()> function) noexcept {
     setpgid(0, 0);
     //TODO: See here on how to emulate tty for colors: http://stackoverflow.com/questions/1401002/trick-an-application-into-thinking-its-stdin-is-interactive-not-a-pipe
     //TODO: One solution is: echo "command;exit"|script -q /dev/null
-    
+
+    if (environment)
+      ExecutionHelper<string_type, map_type>::setenv(*environment);
+
     if(function)
       function();
     
@@ -83,21 +153,10 @@ Process::id_type Process::open(std::function<void()> function) noexcept {
   return pid;
 }
 
-Process::id_type Process::open(const std::string &command, const std::string &path) noexcept {
-  return open([&command, &path] {
-    if(!path.empty()) {
-      auto path_escaped=path;
-      size_t pos=0;
-      //Based on https://www.reddit.com/r/cpp/comments/3vpjqg/a_new_platform_independent_process_library_for_c11/cxsxyb7
-      while((pos=path_escaped.find('\'', pos))!=std::string::npos) {
-        path_escaped.replace(pos, 1, "'\\''");
-        pos+=4;
-      }
-      execl("/bin/sh", "sh", "-c", ("cd '"+path_escaped+"' && "+command).c_str(), NULL);
-    }
-    else
-      execl("/bin/sh", "sh", "-c", command.c_str(), NULL);
-  });
+Process::id_type Process::open(const std::string &command, const std::string &path, map_type *environment) noexcept {
+  return open([environment, &command, &path] {
+    ExecutionHelper<string_type, map_type>::exec(command, path, environment);
+  }, nullptr);
 }
 
 void Process::async_read() noexcept {
